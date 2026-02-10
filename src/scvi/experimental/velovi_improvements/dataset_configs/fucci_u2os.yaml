@@ -1,0 +1,14 @@
+name: fucci_u2os
+aliases:
+  - fucci_u2os_processed
+description: FUCCI U2OS cell-cycle dataset (preprocessed counts).
+scvelo_loader: null
+files:
+  - velovi_cache/fucci_u2os.h5ad
+  - adata_fucci_u2os_processed.h5ad
+group_key: Time
+plot_color_key: Time
+embedding_key: X_umap
+cell_cycle_rad_key: cell_cycle_rad
+preprocess:
+  enabled: false

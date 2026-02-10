@@ -1,0 +1,36 @@
+name: adata_combined_k15
+aliases:
+  - gazit_k15
+  - gazit_merged_k15
+description: Combined dataset provided as loom.
+files:
+  - /gpfs0/bgu-ofircohen/users/likhtepi/CellRanger/files_adata/merged_2311_labeled_k15.h5ad
+scvelo_loader: null
+group_key: celltype
+plot_color_key: celltype
+embedding_key: X_umap
+spliced_layer: spliced
+unspliced_layer: unspliced
+cluster_edges:
+  # HSC activation
+  - [dHSC, aHSC]
+  - [aHSC, cycl_HSC]
+  - [aHSC, MPP]
+  - [MPP, Lymph_prog]
+  - [Lymph_prog, B_Cell_prog]
+  - [B_Cell_prog, Plasma_Cell]
+  - [Lymph_prog, ILC]
+  - [MPP, Myo_prog]
+  - [Myo_prog, Nutrophil]
+  - [Myo_prog, Macro]
+  - [Myo_prog, Mast/Baso]
+  - [MPP, Eryth_prog]
+  - [MPP, Megakar_prog]
+  - [MPP, DC_prog]
+  - [MPP, pDC_prog]
+
+preprocess:
+  enabled: false
+neighbors:
+  n_neighbors: 15
+  use_saved_umap: true

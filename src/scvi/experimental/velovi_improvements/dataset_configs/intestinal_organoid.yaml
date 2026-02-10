@@ -1,0 +1,16 @@
+name: intestinal_organoid
+aliases:
+  - organoid
+description: Intestinal organoid differentiation (processed dataset).
+scvelo_loader: null
+files:
+  - velovi_cache/intestinal_organoid.h5ad
+  - organoids_processed.h5ad
+group_key: cell_type
+plot_color_key: cell_type
+embedding_key: X_umap
+cluster_edges:
+  - [Stem cells, TA cells]
+  - [Stem cells, Goblet cells]
+preprocess:
+  enabled: false

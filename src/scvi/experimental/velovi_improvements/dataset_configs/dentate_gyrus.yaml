@@ -1,0 +1,27 @@
+name: dentate_gyrus
+aliases:
+  - dentategyrus
+  - dentate
+description: Dentate gyrus development dataset (scVelo release / processed copy).
+scvelo_loader: dentategyrus
+files:
+  - 10X43_1_processed.h5ad
+  - velovi_cache/dentate_gyrus.h5ad
+
+group_key: clusters
+plot_color_key: clusters
+embedding_key: X_umap
+cluster_edges:
+  - [nIPC, Neuroblast]
+  - [Neuroblast, Granule immature]
+  - [Granule immature, Granule mature]
+  - [OPC, OL]
+preprocess:
+  enabled: false
+  params:
+    min_counts: 10
+    min_cells: 15
+    min_shared_counts: 30
+    n_top_genes: 2500
+    n_pcs: 40
+    n_neighbors: 40

@@ -1,0 +1,15 @@
+name: adata_combined
+aliases:
+  - gazit
+  - gazit_merged
+description: Combined dataset provided as loom.
+files:
+  - /gpfs0/bgu-ofircohen/users/likhtepi/CellRanger/files_adata/adata_combined.loom
+scvelo_loader: null
+group_key: celltype
+plot_color_key: celltype
+embedding_key: X_umap
+spliced_layer: spliced
+unspliced_layer: unspliced
+preprocess:
+  enabled: true

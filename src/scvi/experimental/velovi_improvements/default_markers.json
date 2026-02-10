@@ -1,0 +1,32 @@
+{
+  "marker_sets": [
+    {
+      "name": "granule_immature",
+      "direction": "decrease",
+      "genes": ["Tmsb10", "Tmsb4x", "Ptma", "Rplp0", "Ybx1", "Ubb"],
+      "branches": [0, 1],
+      "weight": 1.0
+    },
+    {
+      "name": "granule_mature",
+      "direction": "increase",
+      "genes": ["Snca", "Stmn2", "Gria1", "Calm2", "Camk2a", "Grin2b"],
+      "branches": [0, 1],
+      "weight": 1.0
+    },
+    {
+      "name": "mossy_branch",
+      "direction": "increase",
+      "genes": ["Slc17a7", "Mllt11", "Syt1", "Rtn1", "Grin1"],
+      "branches": [2, 3],
+      "weight": 1.0
+    },
+    {
+      "name": "neuroblast_cycle",
+      "direction": "decrease",
+      "genes": ["Mki67", "Top2a", "Ccnb1", "Tubb5", "Rpl4"],
+      "branches": [2, 3],
+      "weight": 0.8
+    }
+  ]
+}

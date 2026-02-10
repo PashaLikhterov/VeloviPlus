@@ -1,0 +1,24 @@
+name: pancreas_endocrinogenesis
+aliases:
+  - pancreas
+description: Pancreatic endocrinogenesis (processed h5ad from /proj/datasets)
+scvelo_loader: pancreas
+files:
+  - endocrinogenesis_day15_processed.h5ad
+  - velovi_cache/pancreas_endocrinogenesis.h5ad
+  - pancreas_endocrinogenesis.h5ad
+group_key: clusters
+plot_color_key: clusters
+embedding_key: X_umap
+cluster_edges:
+  - [Pre-endocrine, Alpha]
+  - [Pre-endocrine, Beta]
+  - [Pre-endocrine, Delta]
+  - [Pre-endocrine, Epsilon]
+preprocess:
+  enabled: false
+  params:
+    min_shared_counts: 20
+    n_top_genes: 2000
+    n_pcs: 30
+    n_neighbors: 30

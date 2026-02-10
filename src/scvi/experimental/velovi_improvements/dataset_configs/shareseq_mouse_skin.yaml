@@ -1,0 +1,19 @@
+name: shareseq_mouse_skin
+aliases:
+  - MouseSkin
+  - mouse_skin
+description: SHARE-seq mouse skin (processed multiome; RNA modality).
+scvelo_loader: null
+files:
+  - velovi_cache/shareseq_mouse_skin.h5ad
+  - mouse_skin_adata_postpro.h5ad
+group_key: celltype
+plot_color_key: celltype
+embedding_key: X_umap
+cluster_edges:
+  - [TAC-1, TAC-2]
+  - [TAC-2, Hair shaft cuticle/cortex]
+  - [TAC-2, IRS]
+  - [TAC-2, Medulla]
+preprocess:
+  enabled: false

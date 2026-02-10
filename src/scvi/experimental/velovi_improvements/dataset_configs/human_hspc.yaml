@@ -1,0 +1,22 @@
+name: human_hspc
+aliases:
+  - HSPCs
+  - hspcs
+description: Human hematopoietic stem and progenitor cells (RNA modality).
+scvelo_loader: null
+files:
+  - velovi_cache/human_hspc.h5ad
+  - 3423-MV-2_adata_postpro.h5ad
+group_key: leiden
+plot_color_key: leiden
+embedding_key: X_umap
+cluster_edges:
+  - [HSC, MPP]
+  - [MPP, LMPP]
+  - [LMPP, GMP]
+  - [HSC, MEP]
+  - [MEP, Erythrocyte]
+  - [MEP, ProgMK]
+  - [ProgMK, Platelet]
+preprocess:
+  enabled: false

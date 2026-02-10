@@ -1,0 +1,12 @@
+name: fucci_rpe1
+description: FUCCI RPE1 cell-cycle dataset (preprocessed counts).
+scvelo_loader: null
+files:
+  - velovi_cache/fucci_rpe1.h5ad
+  - adata_fucci_rpe1_processed.h5ad
+group_key: leiden
+plot_color_key: leiden
+embedding_key: X_umap
+cell_cycle_rad_key: cell_cycle_rad
+preprocess:
+  enabled: false

@@ -1,0 +1,18 @@
+name: adata_R
+description: Custom subset R from full dataset.
+aliases:
+  - adata_R
+  - gazit_merged_R
+files:
+  - /gpfs0/bgu-ofircohen/users/likhtepi/CellRanger/files_adata/adata_R.h5ad
+scvelo_loader: null
+
+group_key: celltype        # or celltype, etc., if you have it
+plot_color_key: celltype
+embedding_key: X_umap     # if you have UMAP; otherwise let pipeline compute it
+
+spliced_layer: spliced    # adjust if different
+unspliced_layer: unspliced
+
+preprocess:
+  enabled: false           # or false if you preprocessed before saving

@@ -1,0 +1,24 @@
+name: fibroblast_reprogramming
+aliases:
+  - reprogramming
+description: Mouse embryonic fibroblast reprogramming (processed MEF→iPSC time-course).
+scvelo_loader: null
+files:
+  - velovi_cache/fibroblast_reprogramming.h5ad
+  - reprogramming_processed.h5ad
+group_key: cluster
+plot_color_key: cluster
+embedding_key: X_tsne
+cluster_edges:
+  - ['5', '2']
+  - ['5', '8']
+  - ['2', '7']
+  - ['8', '4']
+  - ['7', '6']
+  - ['4', '9']
+  - ['6', '1']
+  - ['9', '8']
+  - ['6', '0']
+  - ['8', '0']
+preprocess:
+  enabled: false

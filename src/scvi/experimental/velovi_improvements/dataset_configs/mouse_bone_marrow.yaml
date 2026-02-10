@@ -1,0 +1,26 @@
+name: mouse_bone_marrow
+aliases:
+  - bone_marrow
+description: Mouse bone marrow hematopoiesis (processed scVelo dataset).
+scvelo_loader: bonemarrow
+files:
+  - velovi_cache/mouse_bone_marrow.h5ad
+  - mouse_bone_marrow.h5ad
+  - erythroid_lineage_processed.h5ad
+group_key: ClusterName
+plot_color_key: ClusterName
+embedding_key: X_umap
+cluster_edges:
+  - [Blood progenitors 1, Blood progenitors 2]
+  - [Blood progenitors 2, Erythroid1]
+  - [Erythroid1, Erythroid2]
+  - [Erythroid2, Erythroid3]
+preprocess:
+  enabled: false
+  params:
+    min_counts: 10
+    min_cells: 20
+    min_shared_counts: 30
+    n_top_genes: 3000
+    n_pcs: 40
+    n_neighbors: 50

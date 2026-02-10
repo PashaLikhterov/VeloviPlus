@@ -1,0 +1,19 @@
+name: scnt_neuron_kcl
+aliases:
+  - scNT
+  - scnt
+description: scNT-seq neuron KCl stimulation (processed time course).
+scvelo_loader: null
+files:
+  - velovi_cache/scnt_neuron_kcl.h5ad
+  - scNT_processed.h5ad
+group_key: time_str
+plot_color_key: time_str
+embedding_key: X_umap
+cluster_edges:
+  - ['0', '15']
+  - ['15', '30']
+  - ['30', '60']
+  - ['60', '120']
+preprocess:
+  enabled: false

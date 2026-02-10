@@ -1,0 +1,19 @@
+name: pbmc68k
+description: PBMC 68k (10x, scVelo preprocessing required).
+scvelo_loader: pbmc68k
+files:
+  - velovi_cache/pbmc68k.h5ad
+  - pbmc68k.h5ad
+  - 10X43_1_processed.h5ad
+group_key: clusters
+plot_color_key: clusters
+embedding_key: X_umap
+preprocess:
+  enabled: true
+  params:
+    min_counts: 5
+    min_cells: 30
+    min_shared_counts: 50
+    n_top_genes: 3000
+    n_pcs: 50
+    n_neighbors: 50

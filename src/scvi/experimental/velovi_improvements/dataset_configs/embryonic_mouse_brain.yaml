@@ -1,0 +1,19 @@
+name: embryonic_mouse_brain
+aliases:
+  - MouseBrain
+  - mouse_brain
+description: Embryonic mouse brain (processed multi-modal resource; RNA used).
+scvelo_loader: null
+files:
+  - velovi_cache/embryonic_mouse_brain.h5ad
+  - MouseBrain.h5ad
+group_key: celltype
+plot_color_key: celltype
+embedding_key: X_umap
+cluster_edges:
+  - ['RG, Astro, OPC', 'IPC']
+  - ['IPC', 'V-SVZ']
+  - ['V-SVZ', 'Upper layer']
+  - ['Upper layer', 'Deeper layer']
+preprocess:
+  enabled: false

@@ -1,0 +1,36 @@
+name: dentategyrus_lamanno
+aliases:
+  - dentategyrus2
+description: Dentate gyrus (La Manno et al.) processed dataset.
+scvelo_loader: dentategyrus_lamanno
+files:
+  - velovi_cache/dentategyrus_lamanno.h5ad
+  - dentategyrus_lamanno.h5ad
+  - DentateGyrus_processed.h5ad
+  - Hindbrain_GABA_Glio_processed.h5ad
+group_key: ClusterName
+plot_color_key: ClusterName
+embedding_key: X_tsne
+cluster_edges:
+  - [nIPC, GlialProg]
+  - [GlialProg, ImmAstro]
+  - [GlialProg, OPC]
+  - [nIPC, Nbl1]
+  - [Nbl1, RadialGlia]
+  - [RadialGlia, RadialGlia2]
+  - [Nbl1, Nbl2]
+  - [Nbl2, ImmGranule1]
+  - [ImmGranule1, ImmGranule2]
+  - [ImmGranule2, Granule]
+  - [Nbl2, CA]
+  - [CA, CA1-Sub]
+  - [CA, CA2-3-4]
+preprocess:
+  enabled: false
+  params:
+    min_counts: 10
+    min_cells: 15
+    min_shared_counts: 30
+    n_top_genes: 2500
+    n_pcs: 50
+    n_neighbors: 40

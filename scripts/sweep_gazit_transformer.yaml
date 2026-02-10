@@ -1,0 +1,44 @@
+# sweep_gazit_transformer.yaml
+program: /gpfs0/bgu-ofircohen/users/likhtepi/proj/scvi-tools/scripts/train_gazit.py
+method: bayes
+
+metric:
+  name: benchmark/transformer/CBDir   # or any metric you log
+  goal: maximize
+
+parameters:
+  warmup_epochs:
+    values: [60, 90, 120]
+  total_epochs:
+    value: 400
+  batch_size:
+    values: [256, 512]
+
+  transformer_epochs:
+    values: [10, 15, 20]
+  transformer_learning_rate:
+    values: [5e-4, 1e-3, 2e-3]
+
+  transformer_weight_smooth:
+    values: [0.01, 0.02, 0.05]
+  transformer_weight_smooth_same:
+    values: [0.0, 0.02, 0.05]
+  transformer_weight_boundary_align:
+    values: [0.2, 0.3, 0.5]
+  transformer_weight_boundary_contrast:
+    values: [0.02, 0.05, 0.1]
+
+  transformer_weight_direction:
+    values: [0.5, 0.7, 0.9]
+  transformer_weight_celltype:
+    values: [0.0, 0.5, 1.0]
+  transformer_weight_celltype_dir:
+    values: [0.2, 0.35, 0.5]
+
+  transformer_neighbor_max_distance:
+    values: [3.0, 4.0, 5.0]
+  transformer_max_neighbors:
+    values: [6, 8, 12]
+
+  latent_metric_n_neighbors:
+    values: [10, 15, 20]

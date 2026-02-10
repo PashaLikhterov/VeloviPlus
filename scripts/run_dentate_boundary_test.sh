@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+WORKSPACE="${WORKSPACE:-/gpfs0/bgu-ofircohen/users/likhtepi/proj/scvi-tools}"
+DATA_DIR="${DATA_DIR:-/gpfs0/bgu-ofircohen/users/likhtepi/proj/datasets}"
+OUTPUT_ROOT="${OUTPUT_ROOT:-${WORKSPACE}/results/velovi_dentate_boundary_test}"
+CONDA_ENV="${CONDA_ENV:-/gpfs0/bgu-ofircohen/users/likhtepi/conda_dirs/env/velovi-gnn}"
+SAVE_FIGURES_LOCALLY="${SAVE_FIGURES_LOCALLY:-1}"
+JOB_PREFIX="${JOB_PREFIX:-velovi-dentate-boundary}"
+
+DATASETS=(
+  dentate_gyrus
+  dentategyrus_lamanno
+)
+
+for DATASET in "${DATASETS[@]}"; do
+  JOB_LABEL="${DATASET//_/-}"
+  JOB_NAME="${JOB_PREFIX}-${JOB_LABEL}"
+  OUTPUT_DIR="${OUTPUT_ROOT}/${DATASET}"
+
+  runai-bgu submit cmd \
+    -n "${JOB_NAME}" \
+    -c 64 \
+    -m 240G \
+    -g 1 \
+    --conda "${CONDA_ENV}" \
+    --working-dir "${WORKSPACE}" \
+    -- "
+      python -m scvi.experimental.velovi_improvements.runner \
+        ${DATA_DIR} \
+        --datasets ${DATASET} \
+        --output-dir ${OUTPUT_DIR} \
+        --warmup-epochs 20 \
+        --total-epochs 80 \
+        --batch-size 128 \
+        --latent-dim 10 \
+        --hidden-dim 128 \
+        --gnn-hidden-dim 96 \
+        --gnn-dropout 0.1 \
+        --num-workers 0 \
+        --gnn-neighbor-source both \
+        --gnn-attention \
+        --gnn-gate \
+        --velocity-laplacian-weight 0.05 \
+        --velocity-angle-weight 0.02 \
+        --stream-embed umap \
+        --enable-transformer-refinement \
+        --transformer-epochs 15 \
+        --transformer-hidden-dim 192 \
+        --transformer-layers 3 \
+        --transformer-heads 6 \
+        --transformer-dropout 0.1 \
+        --transformer-batch-size 128 \
+        --transformer-learning-rate 8e-4 \
+        --transformer-weight-smooth 0.15 \
+        --transformer-weight-direction 0.4 \
+        --transformer-weight-smooth-same 0.2 \
+        --transformer-weight-boundary-align 0.35 \
+        --transformer-weight-boundary-contrast 0.05 \
+        --transformer-aux-cluster-loss-weight 0.15 \
+        --transformer-max-neighbors 10 \
+        --skip-preprocess \
+        --checkpoint-dir ${WORKSPACE}/checkpoints \
+        --disable-scvelo-dynamic \
+        --plot-results \
+        --use-wandb \
+        --wandb-project \"RNA-Velocity\" \
+        --wandb-run-group \"${JOB_PREFIX}\" \
+        $( [[ \"${SAVE_FIGURES_LOCALLY}\" == \"0\" ]] && echo \"--disable-local-figures\" )
+    "
+done

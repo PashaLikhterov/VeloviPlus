@@ -1,0 +1,19 @@
+name: developing_human_brain
+aliases:
+  - HumanBrain
+  - human_brain
+description: Developing human brain atlas (processed RNA modality).
+scvelo_loader: null
+files:
+  - velovi_cache/developing_human_brain.h5ad
+  - human_brain_rna_after_filt_r2.h5ad
+group_key: cluster
+plot_color_key: cluster
+embedding_key: X_umap
+cluster_edges:
+  - ['Cyc.', 'RG/Astro']
+  - ['Cyc.', 'nIPC/ExN']
+  - ['nIPC/ExN', 'ExUp']
+  - ['ExUp', 'ExDp']
+preprocess:
+  enabled: false

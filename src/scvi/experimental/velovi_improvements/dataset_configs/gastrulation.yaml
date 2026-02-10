@@ -1,0 +1,21 @@
+name: gastrulation
+aliases:
+  - gastrulation_zf
+description: Zebrafish gastrulation (scVelo reference dataset).
+scvelo_loader: gastrulation
+files:
+  - velovi_cache/gastrulation.h5ad
+  - gastrulation.h5ad
+  - reprogramming_processed.h5ad
+group_key: clusters
+plot_color_key: clusters
+embedding_key: X_umap
+preprocess:
+  enabled: true
+  params:
+    min_counts: 5
+    min_cells: 10
+    min_shared_counts: 20
+    n_top_genes: 2500
+    n_pcs: 35
+    n_neighbors: 40
