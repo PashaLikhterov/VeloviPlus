@@ -145,8 +145,14 @@ def compute_stream_embedding(
         basis_key = None
         if preferred_basis:
             basis_key = f"X_{preferred_basis}"
-        if basis_key is None and "X_umap" in adata.obsm:
-            basis_key = "X_umap"
+        if basis_key is None:
+            if "X_umap" in adata.obsm:
+                basis_key = "X_umap"
+            else:
+                # Reuse any UMAP-like key if present (e.g., X_umap_2, X_umap_orig).
+                umap_keys = [k for k in adata.obsm.keys() if str(k).lower().startswith("x_umap")]
+                if umap_keys:
+                    basis_key = sorted(umap_keys, key=lambda x: x.lower())[0]
         if basis_key is not None and basis_key in adata.obsm:
             embedding = np.asarray(adata.obsm[basis_key], dtype=np.float32)
             if embedding.shape[0] == scores.shape[0]:

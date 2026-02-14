@@ -43,6 +43,7 @@ from scvi.experimental.tivelo.utils import metrics as tivelo_metrics
 from . import benchmark
 from .analysis import generate_variant_streamplots, generate_graph_diagnostics
 from .config import StreamEmbeddingResult, TrainingConfig
+from .plot_bundle import save_plot_bundle
 from .training import (
     add_stream_graph,
     compute_latent_stream_embedding,
@@ -568,11 +569,33 @@ class VELOVIImprovementRunner:
         variant_metric_rows: List[Tuple[str, Dict[str, float]]] = []
         wandb_scalar_logs: Dict[str, float] = {}
         wandb_run = start_wandb_run(self.config, dataset_name)
+        if wandb_run is not None:
+            record["wandb_run_id"] = getattr(wandb_run, "id", None)
+            record["wandb_run_name"] = getattr(wandb_run, "name", None)
+            record["wandb_project"] = self.config.wandb_project
+            record["wandb_entity"] = self.config.wandb_entity
+            try:
+                entity = getattr(wandb_run, "entity", None) or self.config.wandb_entity
+                project = getattr(wandb_run, "project", None) or self.config.wandb_project
+                if entity and project and getattr(wandb_run, "id", None):
+                    record["wandb_run_path"] = f"{entity}/{project}/{wandb_run.id}"
+            except Exception:  # pragma: no cover
+                pass
+            try:
+                print(f"[VELOVI][W&B] run_id={wandb_run.id} name={wandb_run.name}")
+            except Exception:  # pragma: no cover
+                pass
 
         indices, weights = add_stream_graph(adata_reference, dataset_config, key_prefix="velovi_gnn")
         adata.obsm["velovi_gnn_indices"] = indices
         adata.obsm["velovi_gnn_weights"] = weights
         alignment_vectors = prepare_alignment_vectors(adata_reference, indices, dataset_config)
+        try:
+            umap_keys = [k for k in adata_reference.obsm.keys() if str(k).lower().startswith("x_umap")]
+            if umap_keys:
+                print(f"[VELOVI][EMBED] UMAP keys present: {sorted(umap_keys)}")
+        except Exception:  # pragma: no cover
+            pass
 
         use_transformer_encoder = self.config.baseline_encoder == "transformer"
         baseline_cls = VELOVITransformerEncoder if use_transformer_encoder else VELOVI
@@ -765,6 +788,21 @@ class VELOVIImprovementRunner:
         wandb_scalar_logs.update({f"baseline_raw/{k}": v for k, v in result_to_dict(baseline_raw_metrics).items()})
         gene_likelihood_mean = float(baseline_raw_metrics.gene_likelihood_mean)
 
+        stage_status: Dict[str, Dict[str, object]] = {}
+
+        def _run_optional_stage(stage_name: str, fn):
+            print(f"[VELOVI][STAGE] {stage_name} ...")
+            try:
+                out = fn()
+                stage_status[stage_name] = {"status": "ok"}
+                print(f"[VELOVI][STAGE] {stage_name} done")
+                return out
+            except Exception as exc:
+                stage_status[stage_name] = {"status": "failed", "error": repr(exc)}
+                warnings.warn(f"{stage_name} failed: {exc}", RuntimeWarning)
+                print(f"[VELOVI][STAGE] {stage_name} FAILED: {exc}")
+                return None
+
         def compute_metrics_for_variant(
             label: str,
             velocities: np.ndarray,
@@ -794,6 +832,22 @@ class VELOVIImprovementRunner:
                 record.update({f"{ctx_label}_{k}": v for k, v in metrics.items()})
                 wandb_scalar_logs.update({f"{ctx_label}/{k}": v for k, v in metrics.items()})
                 variant_metric_rows.append((ctx_label, metrics))
+                try:
+                    preview_keys = (
+                        "gene_likelihood_mean",
+                        "velocity_norm_mean",
+                        "velocity_cosine_alignment",
+                        "velocity_local_smoothness",
+                    )
+                    preview = ", ".join(
+                        f"{k}={float(metrics[k]):.4g}"
+                        for k in preview_keys
+                        if k in metrics and metrics[k] is not None and np.isfinite(float(metrics[k]))
+                    )
+                    if preview:
+                        print(f"[VELOVI][METRICS] {dataset_name}::{ctx_label}: {preview}")
+                except Exception:  # pragma: no cover
+                    pass
 
         def register_guided_variant(label: str, velocities: Optional[np.ndarray]) -> Optional[np.ndarray]:
             if apply_guidance is None or velocities is None:
@@ -862,11 +916,13 @@ class VELOVIImprovementRunner:
                         "TIVelo guidance produced invalid velocity field; skipping guidance.",
                         RuntimeWarning,
                     )
+                    stage_status["tivelo_guidance"] = {"status": "failed_or_skipped"}
                 else:
                     tivelo_supervised = guidance_velocity
                     tivelo_weights = np.ones(guidance_velocity.shape[0], dtype=np.float32)
                     guidance_confidence = tivelo_weights[:, None]
                     prior_strength = np.clip(self.config.tivelo_prior_strength, 0.0, 1.0)
+                    stage_status["tivelo_guidance"] = {"status": "ok"}
 
                     adata.layers["tivelo_velocity"] = guidance_velocity.astype(np.float32, copy=False)
 
@@ -946,14 +1002,19 @@ class VELOVIImprovementRunner:
                     wandb_scalar_logs["tivelo_guidance/active_fraction"] = float(np.mean(tivelo_weights))
             except Exception as exc:  # pragma: no cover
                 warnings.warn(f"TIVelo guidance failed: {exc}", RuntimeWarning)
+                stage_status["tivelo_guidance"] = {"status": "failed", "error": repr(exc)}
 
         if tivelo_supervised is None:
             if wandb_run is not None:
                 wandb_scalar_logs["tivelo_guidance/active_fraction"] = 0.0
 
         if self.config.enable_latent_smoothing and latent_graph is not None:
-            with record_runtime("baseline_latent"):
-                baseline_latent_velocity = smooth_velocities_with_graph(baseline_velocity, latent_graph)
+            def _baseline_latent_velocity_stage():
+                nonlocal baseline_latent_velocity
+                with record_runtime("baseline_latent"):
+                    baseline_latent_velocity = smooth_velocities_with_graph(baseline_velocity, latent_graph)
+
+            _run_optional_stage("baseline_latent_velocity", _baseline_latent_velocity_stage)
 
         cell_type_ids_array: Optional[np.ndarray] = None
         cell_type_velocity_means: Optional[np.ndarray] = None
@@ -1052,80 +1113,90 @@ class VELOVIImprovementRunner:
                 stream_velocity_variants["scvelo_dynamic"] = dynamic_velocity.astype(np.float32)
                 adata_dynamic_result = adata_dynamic
                 register_guided_variant("scvelo_dynamic", dynamic_velocity)
+                stage_status["scvelo_dynamic"] = {"status": "ok"}
+            else:
+                stage_status["scvelo_dynamic"] = {"status": "failed_or_skipped"}
 
         transformer_velocity = None
         transformer_velocity_latent = None
         if self.config.enable_transformer_refinement:
-            print(f"[VELOVI] Training transformer refiner for {dataset_name}")
-            if latent is None:
-                latent = baseline_model.get_latent_representation()
-            transformer_config = TransformerConfig(
-                n_layers=self.config.transformer_layers,
-                n_heads=self.config.transformer_heads,
-                hidden_dim=self.config.transformer_hidden_dim,
-                dropout=self.config.transformer_dropout,
-                batch_size=self.config.transformer_batch_size,
-                epochs=self.config.transformer_epochs,
-                learning_rate=self.config.transformer_learning_rate,
-                weight_alignment=self.config.transformer_weight_alignment,
-                weight_supervised=self.config.transformer_weight_supervised,
-                weight_smooth=self.config.transformer_weight_smooth,
-                weight_smooth_same=self.config.transformer_weight_smooth_same,
-                weight_boundary_align=self.config.transformer_weight_boundary_align,
-                weight_boundary_contrast=self.config.transformer_weight_boundary_contrast,
-                weight_direction=self.config.transformer_weight_direction,
-                weight_celltype=self.config.transformer_weight_celltype,
-                weight_celltype_dir=self.config.transformer_weight_celltype_dir,
-                weight_celltype_mag=self.config.transformer_weight_celltype_mag,
-                max_neighbors=self.config.transformer_max_neighbors,
-                celltype_penalty=self.config.transformer_celltype_penalty,
-                aux_cluster_loss_weight=self.config.transformer_aux_cluster_loss_weight,
-                neighbor_max_distance=self.config.transformer_neighbor_max_distance,
-                residual_to_baseline=self.config.transformer_residual_to_baseline,
-                device="cuda" if use_gpu else "cpu",
-            )
-            transformer_state_path = self.output_dir / f"velovi_{dataset_name}_transformer.pt"
-            with record_runtime("baseline_transformer"):
-                transformer_velocity = refine_velocities_with_transformer(
-                    latent=latent,
-                    embedding=stream_embedding.embedding if stream_embedding.embedding is not None else latent,
-                    baseline_velocity=baseline_velocity,
-                    neighbor_indices=indices,
-                    velocity_components=stream_embedding.components,
-                    projection=stream_embedding.projection,
-                    config=transformer_config,
-                    wandb_run=wandb_run,
-                    wandb_prefix="transformer/train",
-                    cell_type_ids=cell_type_ids_array,
-                    type_means=cell_type_velocity_means,
-                    cluster_labels=cluster_label_int,
-                    cluster_edge_list=transformer_cluster_edges_int,
-                    alignment_vectors=alignment_vectors,
-                    supervised_target=tivelo_supervised,
-                    supervised_weight=tivelo_weights,
-                    save_path=str(transformer_state_path),
+            def _transformer_stage():
+                nonlocal transformer_velocity, transformer_velocity_latent, latent
+                print(f"[VELOVI] Training transformer refiner for {dataset_name}")
+                if latent is None:
+                    latent = baseline_model.get_latent_representation()
+                transformer_config = TransformerConfig(
+                    n_layers=self.config.transformer_layers,
+                    n_heads=self.config.transformer_heads,
+                    hidden_dim=self.config.transformer_hidden_dim,
+                    dropout=self.config.transformer_dropout,
+                    batch_size=self.config.transformer_batch_size,
+                    epochs=self.config.transformer_epochs,
+                    learning_rate=self.config.transformer_learning_rate,
+                    weight_alignment=self.config.transformer_weight_alignment,
+                    weight_supervised=self.config.transformer_weight_supervised,
+                    weight_smooth=self.config.transformer_weight_smooth,
+                    weight_smooth_same=self.config.transformer_weight_smooth_same,
+                    weight_boundary_align=self.config.transformer_weight_boundary_align,
+                    weight_boundary_contrast=self.config.transformer_weight_boundary_contrast,
+                    weight_direction=self.config.transformer_weight_direction,
+                    weight_celltype=self.config.transformer_weight_celltype,
+                    weight_celltype_dir=self.config.transformer_weight_celltype_dir,
+                    weight_celltype_mag=self.config.transformer_weight_celltype_mag,
+                    max_neighbors=self.config.transformer_max_neighbors,
+                    celltype_penalty=self.config.transformer_celltype_penalty,
+                    aux_cluster_loss_weight=self.config.transformer_aux_cluster_loss_weight,
+                    neighbor_max_distance=self.config.transformer_neighbor_max_distance,
+                    residual_to_baseline=self.config.transformer_residual_to_baseline,
+                    device="cuda" if use_gpu else "cpu",
                 )
-            transformer_metrics = compute_metrics_for_variant("transformer", transformer_velocity)
-            register_metrics(transformer_metrics)
-            stream_velocity_variants["transformer"] = transformer_velocity.astype(np.float32)
-            register_guided_variant("transformer", transformer_velocity)
-            if latent_graph is not None:
-                with record_runtime("baseline_transformer_latent"):
-                    transformer_velocity_latent = smooth_velocities_with_graph(transformer_velocity, latent_graph)
-                transformer_latent_metrics = compute_metrics_for_variant(
-                    "transformer_latent",
-                    transformer_velocity_latent,
-                )
-                register_metrics(transformer_latent_metrics)
-                stream_velocity_variants["transformer_latent"] = transformer_velocity_latent.astype(np.float32)
-                register_guided_variant("transformer_latent", transformer_velocity_latent)
+                transformer_state_path = self.output_dir / f"velovi_{dataset_name}_transformer.pt"
+                with record_runtime("baseline_transformer"):
+                    transformer_velocity = refine_velocities_with_transformer(
+                        latent=latent,
+                        embedding=stream_embedding.embedding if stream_embedding.embedding is not None else latent,
+                        baseline_velocity=baseline_velocity,
+                        neighbor_indices=indices,
+                        velocity_components=stream_embedding.components,
+                        projection=stream_embedding.projection,
+                        config=transformer_config,
+                        wandb_run=wandb_run,
+                        wandb_prefix="transformer/train",
+                        cell_type_ids=cell_type_ids_array,
+                        type_means=cell_type_velocity_means,
+                        cluster_labels=cluster_label_int,
+                        cluster_edge_list=transformer_cluster_edges_int,
+                        alignment_vectors=alignment_vectors,
+                        supervised_target=tivelo_supervised,
+                        supervised_weight=tivelo_weights,
+                        save_path=str(transformer_state_path),
+                    )
+                transformer_metrics = compute_metrics_for_variant("transformer", transformer_velocity)
+                register_metrics(transformer_metrics)
+                stream_velocity_variants["transformer"] = transformer_velocity.astype(np.float32)
+                register_guided_variant("transformer", transformer_velocity)
+                if latent_graph is not None:
+                    with record_runtime("baseline_transformer_latent"):
+                        transformer_velocity_latent = smooth_velocities_with_graph(transformer_velocity, latent_graph)
+                    transformer_latent_metrics = compute_metrics_for_variant(
+                        "transformer_latent",
+                        transformer_velocity_latent,
+                    )
+                    register_metrics(transformer_latent_metrics)
+                    stream_velocity_variants["transformer_latent"] = transformer_velocity_latent.astype(np.float32)
+                    register_guided_variant("transformer_latent", transformer_velocity_latent)
+
+            _run_optional_stage("transformer_refinement", _transformer_stage)
 
         if self.config.enable_latent_smoothing and baseline_latent_velocity is not None:
-            print(f"[VELOVI] Applying latent smoothing for {dataset_name}")
-            latent_metrics = compute_metrics_for_variant("latent", baseline_latent_velocity)
-            register_metrics(latent_metrics)
-            stream_velocity_variants["latent"] = baseline_latent_velocity.astype(np.float32)
-            register_guided_variant("latent", baseline_latent_velocity)
+            def _latent_smoothing_stage():
+                print(f"[VELOVI] Applying latent smoothing for {dataset_name}")
+                latent_metrics = compute_metrics_for_variant("latent", baseline_latent_velocity)
+                register_metrics(latent_metrics)
+                stream_velocity_variants["latent"] = baseline_latent_velocity.astype(np.float32)
+                register_guided_variant("latent", baseline_latent_velocity)
+
+            _run_optional_stage("baseline_latent_smoothing", _latent_smoothing_stage)
 
         adata_gnn = adata_reference.copy()
         latent_indices = None
@@ -1197,132 +1268,141 @@ class VELOVIImprovementRunner:
         gnn_gene_likelihood = None
         gnn_loaded_from_ckpt = False
         gnn_eval_adata: Optional[AnnData] = None
+        gnn_model = None
         if self.config.enable_gnn:
-            print(f"[VELOVI] Training VELOVI+GNN for {dataset_name}")
-            stem = self._checkpoint_stem(dataset_name, dataset_config)
-            gnn_sig = (
-                f"gh{self.config.gnn_hidden_dim}_gd{self.config.gnn_dropout_rate}_"
-                f"att{int(self.config.gnn_use_attention)}_gate{int(self.config.gnn_use_gate)}_"
-                f"res{int(self.config.gnn_use_residual)}_diff{int(self.config.gnn_use_differences)}"
-            )
-            if self.config.use_checkpoints:
-                gnn_ckpt = self.checkpoint_dir / f"{stem}_{gnn_sig}_gnn"
-            else:
-                gnn_ckpt = None
-            gnn_model = None
-            if gnn_ckpt is not None and gnn_ckpt.exists():
-                if self.config.load_pretrained:
-                    gnn_model = VELOVIWithGNN.load(gnn_ckpt, adata=adata_gnn)
-                    gnn_loaded_from_ckpt = True
-                else:
-                    warnings.warn(
-                        f"Found GNN checkpoint at {gnn_ckpt} but load_pretrained is disabled. "
-                        "Retraining GNN model from scratch.",
-                        RuntimeWarning,
-                    )
-            if gnn_model is None:
-                gnn_model = VELOVIWithGNN(
-                    adata_gnn,
-                    n_hidden=self.config.n_hidden,
-                    n_latent=self.config.n_latent,
-                    n_layers=self.config.n_layers,
-                    dropout_rate=self.config.dropout_rate,
-                    gnn_hidden_dim=self.config.gnn_hidden_dim,
-                    gnn_dropout_rate=self.config.gnn_dropout_rate,
-                    gnn_use_attention=self.config.gnn_use_attention,
-                    gnn_use_gate=self.config.gnn_use_gate,
-                    gnn_use_residual=self.config.gnn_use_residual,
-                    gnn_use_differences=self.config.gnn_use_differences,
-                    velocity_laplacian_weight=self.config.velocity_laplacian_weight,
-                    velocity_angle_weight=self.config.velocity_angle_weight,
-                    velocity_angle_eps=self.config.velocity_angle_eps,
-                    gnn_continuity_weight=self.config.gnn_continuity_weight,
-                    gnn_continuity_horizon=self.config.gnn_continuity_horizon,
+            def _gnn_stage():
+                nonlocal gnn_model, gnn_velocity, gnn_gene_likelihood, gnn_loaded_from_ckpt, gnn_eval_adata
+                print(f"[VELOVI] Training VELOVI+GNN for {dataset_name}")
+                stem = self._checkpoint_stem(dataset_name, dataset_config)
+                gnn_sig = (
+                    f"gh{self.config.gnn_hidden_dim}_gd{self.config.gnn_dropout_rate}_"
+                    f"att{int(self.config.gnn_use_attention)}_gate{int(self.config.gnn_use_gate)}_"
+                    f"res{int(self.config.gnn_use_residual)}_diff{int(self.config.gnn_use_differences)}"
                 )
-                with record_runtime("baseline_gnn"):
-                    gnn_train_epochs = (
-                        self.config.gnn_epochs if self.config.gnn_epochs is not None else self.config.total_epochs
+                if self.config.use_checkpoints:
+                    gnn_ckpt = self.checkpoint_dir / f"{stem}_{gnn_sig}_gnn"
+                else:
+                    gnn_ckpt = None
+                if gnn_ckpt is not None and gnn_ckpt.exists():
+                    if self.config.load_pretrained:
+                        gnn_model = VELOVIWithGNN.load(gnn_ckpt, adata=adata_gnn)
+                        gnn_loaded_from_ckpt = True
+                    else:
+                        warnings.warn(
+                            f"Found GNN checkpoint at {gnn_ckpt} but load_pretrained is disabled. "
+                            "Retraining GNN model from scratch.",
+                            RuntimeWarning,
+                        )
+                if gnn_model is None:
+                    gnn_model = VELOVIWithGNN(
+                        adata_gnn,
+                        n_hidden=self.config.n_hidden,
+                        n_latent=self.config.n_latent,
+                        n_layers=self.config.n_layers,
+                        dropout_rate=self.config.dropout_rate,
+                        gnn_hidden_dim=self.config.gnn_hidden_dim,
+                        gnn_dropout_rate=self.config.gnn_dropout_rate,
+                        gnn_use_attention=self.config.gnn_use_attention,
+                        gnn_use_gate=self.config.gnn_use_gate,
+                        gnn_use_residual=self.config.gnn_use_residual,
+                        gnn_use_differences=self.config.gnn_use_differences,
+                        velocity_laplacian_weight=self.config.velocity_laplacian_weight,
+                        velocity_angle_weight=self.config.velocity_angle_weight,
+                        velocity_angle_eps=self.config.velocity_angle_eps,
+                        gnn_continuity_weight=self.config.gnn_continuity_weight,
+                        gnn_continuity_horizon=self.config.gnn_continuity_horizon,
                     )
-                    gnn_batch_size = (
-                        self.config.gnn_batch_size
-                        if self.config.gnn_batch_size is not None
-                        else self.config.batch_size
-                    )
-                    gnn_model.train(
-                        max_epochs=gnn_train_epochs,
-                        batch_size=gnn_batch_size,
-                        early_stopping=True,
-                        accelerator=accelerator,
-                        devices=devices,
-                    )
-                if self.config.use_checkpoints and gnn_ckpt is not None:
-                    gnn_model.save(gnn_ckpt, overwrite=True)
-                # Always drop a reusable checkpoint under output_dir
-                gnn_persist_path = self.output_dir / f"velovi_{dataset_name}_gnn"
-                gnn_model.save(gnn_persist_path, overwrite=True)
-                history = getattr(gnn_model, "history_", None)
-                if history is None:
-                    history = getattr(gnn_model, "history", None)
-                log_training_history(wandb_run, history, "gnn/train")
-                # GNN training summary figure
-                try:
-                    gnn_summary_path = _plot_training_summary(
-                        history,
-                        title=f"{dataset_name} – GNN Training Summary",
-                        output_path=Path(self.output_dir)
-                        / f"velovi_{dataset_name}"
-                        / "figures"
-                        / f"{dataset_name}_gnn_train_summary.png",
-                    )
-                    if gnn_summary_path is not None:
-                        figure_paths["diagnostic/train_gnn_summary"] = (gnn_summary_path, False)
-                except Exception:  # pragma: no cover
-                    pass
-            if gnn_loaded_from_ckpt and wandb_run is not None:
-                wandb_run.log({"gnn/checkpoint_loaded": 1})
+                    with record_runtime("baseline_gnn"):
+                        gnn_train_epochs = (
+                            self.config.gnn_epochs
+                            if self.config.gnn_epochs is not None
+                            else self.config.total_epochs
+                        )
+                        gnn_batch_size = (
+                            self.config.gnn_batch_size
+                            if self.config.gnn_batch_size is not None
+                            else self.config.batch_size
+                        )
+                        gnn_model.train(
+                            max_epochs=gnn_train_epochs,
+                            batch_size=gnn_batch_size,
+                            early_stopping=True,
+                            accelerator=accelerator,
+                            devices=devices,
+                        )
+                    if self.config.use_checkpoints and gnn_ckpt is not None:
+                        gnn_model.save(gnn_ckpt, overwrite=True)
+                    # Always drop a reusable checkpoint under output_dir
+                    gnn_persist_path = self.output_dir / f"velovi_{dataset_name}_gnn"
+                    gnn_model.save(gnn_persist_path, overwrite=True)
+                    history = getattr(gnn_model, "history_", None)
+                    if history is None:
+                        history = getattr(gnn_model, "history", None)
+                    log_training_history(wandb_run, history, "gnn/train")
+                    # GNN training summary figure
+                    try:
+                        gnn_summary_path = _plot_training_summary(
+                            history,
+                            title=f"{dataset_name} – GNN Training Summary",
+                            output_path=Path(self.output_dir)
+                            / f"velovi_{dataset_name}"
+                            / "figures"
+                            / f"{dataset_name}_gnn_train_summary.png",
+                        )
+                        if gnn_summary_path is not None:
+                            figure_paths["diagnostic/train_gnn_summary"] = (gnn_summary_path, False)
+                    except Exception:  # pragma: no cover
+                        pass
+                if gnn_loaded_from_ckpt and wandb_run is not None:
+                    wandb_run.log({"gnn/checkpoint_loaded": 1})
 
-            if gnn_model is not None:
-                try:
-                    gnn_eval_adata = add_velovi_outputs_to_adata(adata_gnn, gnn_model)
-                    scv.tl.velocity_graph(
-                        gnn_eval_adata,
-                        vkey="velocity",
-                        n_jobs=max(1, self.config.scvelo_dynamics_n_jobs),
-                        mode_neighbors="distances",
-                        approx=False,
-                        show_progress_bar=False,
-                    )
-                    method_specific_anndatas["baseline_gnn"] = gnn_eval_adata
-                except Exception as exc:
-                    warnings.warn(f"Failed to build scVelo-compatible GNN AnnData: {exc}", RuntimeWarning)
+                if gnn_model is not None:
+                    try:
+                        gnn_eval_adata = add_velovi_outputs_to_adata(adata_gnn, gnn_model)
+                        scv.tl.velocity_graph(
+                            gnn_eval_adata,
+                            vkey="velocity",
+                            n_jobs=32,
+                            mode_neighbors="distances",
+                            approx=False,
+                            show_progress_bar=False,
+                        )
+                        method_specific_anndatas["baseline_gnn"] = gnn_eval_adata
+                    except Exception as exc:
+                        warnings.warn(f"Failed to build scVelo-compatible GNN AnnData: {exc}", RuntimeWarning)
 
-            gnn_velocity = gnn_model.get_velocity(return_numpy=True)
-            gnn_gene_likelihood = float(
-                gnn_model.get_gene_likelihood(return_mean=True, return_numpy=True).mean()
-            )
-            gnn_metrics = compute_metrics_for_variant(
-                "gnn",
-                gnn_velocity,
-                likelihood_override=gnn_gene_likelihood,
-            )
-            register_metrics(gnn_metrics)
-            stream_velocity_variants["gnn"] = gnn_velocity.astype(np.float32)
-            register_guided_variant("gnn", gnn_velocity)
+                    gnn_velocity = gnn_model.get_velocity(return_numpy=True)
+                    gnn_gene_likelihood = float(
+                        gnn_model.get_gene_likelihood(return_mean=True, return_numpy=True).mean()
+                    )
+                    gnn_metrics = compute_metrics_for_variant(
+                        "gnn",
+                        gnn_velocity,
+                        likelihood_override=gnn_gene_likelihood,
+                    )
+                    register_metrics(gnn_metrics)
+                    stream_velocity_variants["gnn"] = gnn_velocity.astype(np.float32)
+                    register_guided_variant("gnn", gnn_velocity)
+
+            _run_optional_stage("gnn_training", _gnn_stage)
 
         if self.config.enable_gnn and self.config.enable_gnn_latent_smoothing and gnn_velocity is not None:
-            print(f"[VELOVI] Applying latent smoothing to GNN outputs for {dataset_name}")
-            gnn_latent = gnn_model.get_latent_representation()
-            gnn_latent_graph = LatentEmbeddingGraphBuilder(self.config.latent_graph).build(gnn_latent)
-            with record_runtime("baseline_gnn_latent"):
-                gnn_smoothed_velocity = smooth_velocities_with_graph(gnn_velocity, gnn_latent_graph)
-            gnn_latent_metrics = compute_metrics_for_variant(
-                "gnn_latent",
-                gnn_smoothed_velocity,
-                likelihood_override=gnn_gene_likelihood,
-            )
-            register_metrics(gnn_latent_metrics)
-            stream_velocity_variants["gnn_latent"] = gnn_smoothed_velocity.astype(np.float32)
-            register_guided_variant("gnn_latent", gnn_smoothed_velocity)
+            def _gnn_latent_stage():
+                print(f"[VELOVI] Applying latent smoothing to GNN outputs for {dataset_name}")
+                gnn_latent = gnn_model.get_latent_representation()
+                gnn_latent_graph = LatentEmbeddingGraphBuilder(self.config.latent_graph).build(gnn_latent)
+                with record_runtime("baseline_gnn_latent"):
+                    gnn_smoothed_velocity = smooth_velocities_with_graph(gnn_velocity, gnn_latent_graph)
+                gnn_latent_metrics = compute_metrics_for_variant(
+                    "gnn_latent",
+                    gnn_smoothed_velocity,
+                    likelihood_override=gnn_gene_likelihood,
+                )
+                register_metrics(gnn_latent_metrics)
+                stream_velocity_variants["gnn_latent"] = gnn_smoothed_velocity.astype(np.float32)
+                register_guided_variant("gnn_latent", gnn_smoothed_velocity)
+
+            _run_optional_stage("gnn_latent_smoothing", _gnn_latent_stage)
 
         benchmark_results: Optional[Dict[str, benchmark.MethodBenchmarkResult]] = None
         benchmark_figures: Dict[str, Path] = {}
@@ -1400,11 +1480,11 @@ class VELOVIImprovementRunner:
             method_key = method_name.replace("/", "_")
             output_path = tables_dir / f"{dataset_name}_{method_key}_gene_velocity.csv"
             header_written = False
-            for (subset_value, celltype_value), indices in group_indices:
-                if len(indices) == 0:
+            for (subset_value, celltype_value), group_obs_indices in group_indices:
+                if len(group_obs_indices) == 0:
                     continue
-                idx = np.asarray(indices, dtype=int)
-                mean_abs = np.nanmean(np.abs(velocities[idx]), axis=0)
+                group_idx = np.asarray(group_obs_indices, dtype=int)
+                mean_abs = np.nanmean(np.abs(velocities[group_idx]), axis=0)
                 df = pd.DataFrame(
                     {
                         "subset_type": subset_value,
@@ -1670,6 +1750,45 @@ class VELOVIImprovementRunner:
                     figure_paths[f"latent_time/{variant_name}"] = (latent_path, False)
                 except Exception as exc:  # pragma: no cover
                     warnings.warn(f"Failed to create latent time scatter for {variant_name}: {exc}", RuntimeWarning)
+
+        stage_df: Optional[pd.DataFrame] = None
+        try:
+            if stage_status:
+                stage_rows = []
+                for stage_name, info in stage_status.items():
+                    row = {"dataset": dataset_name, "stage": stage_name}
+                    if isinstance(info, dict):
+                        row.update(info)
+                    stage_rows.append(row)
+                stage_df = pd.DataFrame(stage_rows)
+                stage_dir = (Path(self.output_dir) / f"velovi_{dataset_name}" / "tables")
+                stage_dir.mkdir(parents=True, exist_ok=True)
+                stage_path = stage_dir / f"{dataset_name}_stage_status.csv"
+                stage_df.to_csv(stage_path, index=False)
+                benchmark_tables["stage_status"] = stage_path
+                print(f"[VELOVI][SUMMARY] Stage status written to {stage_path}")
+                for _, row in stage_df.iterrows():
+                    print(f"[VELOVI][SUMMARY] {dataset_name}::{row.get('stage')} -> {row.get('status')}")
+        except Exception as exc:  # pragma: no cover
+            warnings.warn(f"Failed to persist stage status: {exc}", RuntimeWarning)
+
+        plot_bundle_paths: Optional[Tuple[Path, Path, Path]] = None
+        if self.config.use_wandb and wandb_run is not None and self.config.wandb_log_plot_bundle:
+            try:
+                plot_bundle_paths = save_plot_bundle(
+                    dataset_name=dataset_name,
+                    adata=adata_reference,
+                    dataset_config=dataset_config,
+                    training_config=self.config,
+                    plot_color_key=plot_color_key,
+                    velocities=stream_velocity_variants,
+                    output_dir=self.output_dir,
+                )
+                record["plot_bundle_dir"] = str((Path(self.output_dir) / f"velovi_{dataset_name}" / "plot_bundle"))
+                print(f"[VELOVI][BUNDLE] Saved plot bundle for {dataset_name}")
+            except Exception as exc:  # pragma: no cover
+                warnings.warn(f"Failed to create plot bundle: {exc}", RuntimeWarning)
+
         if wandb_run is not None:
             if variant_metric_rows and self._wandb is not None:
                 metric_keys = sorted({key for _, metrics in variant_metric_rows for key in metrics})
@@ -1693,6 +1812,18 @@ class VELOVIImprovementRunner:
             if training_runtime_df is not None and self._wandb is not None:
                 training_table = self._wandb.Table(dataframe=training_runtime_df)
                 wandb_run.log({f"{dataset_name}/training_runtime": training_table})
+            if stage_df is not None and self._wandb is not None:
+                stage_table = self._wandb.Table(dataframe=stage_df)
+                wandb_run.log({f"{dataset_name}/stage_status": stage_table})
+            if plot_bundle_paths is not None and self._wandb is not None:
+                try:
+                    artifact = self._wandb.Artifact("plot_bundle", type="plot_bundle")
+                    for p in plot_bundle_paths:
+                        artifact.add_file(str(p))
+                    wandb_run.log_artifact(artifact)
+                    print(f"[VELOVI][W&B] Logged plot bundle artifact: plot_bundle")
+                except Exception as exc:  # pragma: no cover
+                    warnings.warn(f"Failed to log plot bundle artifact: {exc}", RuntimeWarning)
             if figure_paths:
                 for variant_key, fig_info in figure_paths.items():
                     fig_path, ephemeral = fig_info
@@ -2099,6 +2230,11 @@ def main():
     parser.add_argument("--wandb-api-key", type=str, default=None)
     parser.add_argument("--wandb-run-group", type=str, default=None)
     parser.add_argument(
+        "--disable-wandb-plot-bundle",
+        action="store_true",
+        help="Do not log plot-bundle artifacts (adata + velocities) to W&B for re-plotting later.",
+    )
+    parser.add_argument(
         "--disable-local-figures",
         action="store_true",
         help="Skip persisting plots/diagnostics on disk (still logs to W&B if enabled).",
@@ -2204,6 +2340,7 @@ def main():
         wandb_entity=args.wandb_entity,
         wandb_api_key=args.wandb_api_key,
         wandb_run_group=args.wandb_run_group,
+        wandb_log_plot_bundle=not args.disable_wandb_plot_bundle,
         latent_metric_n_neighbors=args.latent_metric_n_neighbors,
         use_gpu=not args.cpu_only,
         skip_preprocess=args.skip_preprocess,

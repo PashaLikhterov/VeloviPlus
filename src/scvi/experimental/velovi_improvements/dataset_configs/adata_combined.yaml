@@ -2,9 +2,9 @@ name: adata_combined
 aliases:
   - gazit
   - gazit_merged
-description: Combined dataset provided as loom.
+description: Combined dataset provided as h5ad.
 files:
-  - /gpfs0/bgu-ofircohen/users/likhtepi/CellRanger/files_adata/adata_combined.loom
+  - /gpfs0/bgu-ofircohen/users/likhtepi/CellRanger/files_adata/merged_2311_labeled.h5ad
 scvelo_loader: null
 group_key: celltype
 plot_color_key: celltype

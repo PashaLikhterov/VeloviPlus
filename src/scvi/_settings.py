@@ -6,7 +6,23 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import torch
-from lightning.pytorch import seed_everything
+try:
+    # lightning>=2
+    from lightning.pytorch import seed_everything  # type: ignore
+except ModuleNotFoundError:  # pragma: no cover
+    try:
+        # pytorch-lightning<2 (common on older cluster envs)
+        from pytorch_lightning import seed_everything  # type: ignore
+    except ModuleNotFoundError:  # pragma: no cover
+        # Minimal fallback to keep lightweight utilities (e.g. experimental modules)
+        # importable even when Lightning isn't installed.
+        def seed_everything(seed: int | None = None, workers: bool = True):  # type: ignore[override]
+            if seed is None:
+                return None
+            torch.manual_seed(int(seed))
+            if torch.cuda.is_available():
+                torch.cuda.manual_seed_all(int(seed))
+            return int(seed)
 from rich.console import Console
 from rich.logging import RichHandler
 

@@ -177,9 +177,10 @@ class DNN(object):
                     cos_u = torch.sum(torch.mean(cos_u * self.knn[idx, :][:, idx], dim=1)) / (n_neighs + 1e-6)
                     cos_s = torch.sum(torch.mean(cos_s * self.knn[idx, :][:, idx], dim=1)) / (n_neighs + 1e-6)
                 else:
-                    n_neighs = torch.mean(torch.sum(same_c * self.knn[idx, :][:, idx], dim=1))
-                    cos_u = torch.sum(torch.mean(cos_u * same_c * self.knn[idx, :][:, idx], dim=1)) / (n_neighs + 1e-6)
-                    cos_s = torch.sum(torch.mean(cos_s * same_c * self.knn[idx, :][:, idx], dim=1)) / (n_neighs + 1e-6)
+                    same_c_batch = same_c[idx, :][:, idx]
+                    n_neighs = torch.mean(torch.sum(same_c_batch * self.knn[idx, :][:, idx], dim=1))
+                    cos_u = torch.sum(torch.mean(cos_u * same_c_batch * self.knn[idx, :][:, idx], dim=1)) / (n_neighs + 1e-6)
+                    cos_s = torch.sum(torch.mean(cos_s * same_c_batch * self.knn[idx, :][:, idx], dim=1)) / (n_neighs + 1e-6)
 
                 # loss
                 mse_u, mse_s = mse(u + v_u, d_u), mse(s + v_s, d_s)

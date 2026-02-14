@@ -41,6 +41,21 @@ def _select_embedding_for_plot(adata, dataset_config: DatasetConfig) -> Tuple[Op
             coords = np.asarray(adata.obsm[obsm_key], dtype=np.float32)
             if coords.ndim == 2 and coords.shape[1] >= 2:
                 return basis_name, coords[:, :2]
+
+    # Fallback: reuse any existing UMAP-like embedding key (do not recompute).
+    # Many datasets store variants like `X_umap_2` or `X_umap_orig`.
+    obsm_keys = list(getattr(adata, "obsm", {}).keys())
+    umap_keys = [k for k in obsm_keys if k.lower().startswith("x_umap")]
+    if "X_umap" in adata.obsm:
+        umap_keys = ["X_umap"] + [k for k in umap_keys if k != "X_umap"]
+    if not umap_keys:
+        umap_keys = [k for k in obsm_keys if "umap" in k.lower() and k.lower().startswith("x_")]
+    if umap_keys:
+        chosen = sorted(umap_keys, key=lambda x: (0 if x == "X_umap" else 1, x.lower()))[0]
+        coords = np.asarray(adata.obsm[chosen], dtype=np.float32)
+        if coords.ndim == 2 and coords.shape[1] >= 2:
+            basis_name = chosen[2:] if chosen.lower().startswith("x_") else chosen
+            return basis_name, coords[:, :2]
     return None, None
 
 
@@ -57,6 +72,8 @@ def generate_variant_streamplots(
     output_dir: Path,
     context_label: str = "expression",
     save_locally: bool = True,
+    figsize: Tuple[float, float] = (8.5, 6.5),
+    legend_right_margin: float = 0.78,
 ) -> Dict[str, Tuple[Path, bool]]:
     scv.settings.set_figure_params(dpi=220, frameon=False)
     scv.settings.verbosity = 0
@@ -154,20 +171,29 @@ def generate_variant_streamplots(
             use_negative_cosines=False,
         )
 
-        fig, ax = plt.subplots(figsize=(5, 4))
+        fig, ax = plt.subplots(figsize=figsize)
         scv.pl.velocity_embedding_stream(
             adata_stream,
             basis=basis_name,
             color=color_key_value,
             legend_loc="right margin",
-            colorbar=True,
+            legend_fontsize=12,
+            colorbar=False,
+            linewidth=1.8,
+            arrow_size=1.6,
+            density=1.6,
+            alpha=0.9,
             ax=ax,
             show=False,
-
         )
         method_title = variant_titles.get(variant_key, variant_key.replace("_", " ").title())
         ax.set_title(f"{space_label} - {method_title}", fontsize=11)
 
+        if legend_right_margin is not None:
+            try:
+                fig.subplots_adjust(right=float(legend_right_margin))
+            except Exception:
+                pass
         fig.tight_layout()
         filename = f"{dataset_name}_{variant_key}_velocity_streamlines.png"
         if context_label and context_label != "expression":

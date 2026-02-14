@@ -104,18 +104,22 @@ class PreprocessConfig:
         sc.tl.pca(adata, n_comps=self.n_pcs, svd_solver="arpack")
         sc.pp.neighbors(adata, n_neighbors=self.n_neighbors, n_pcs=self.n_pcs)
         scv.pp.moments(adata, n_pcs=self.n_pcs, n_neighbors=self.n_neighbors)
-        try:
-            sc.tl.umap(adata, n_components=2)
-        except ModuleNotFoundError:
-            warnings.warn(
-                "UMAP is not installed; skipping `sc.tl.umap` during preprocessing.",
-                RuntimeWarning,
-            )
-        except Exception as exc:
-            warnings.warn(
-                f"Failed to compute UMAP during preprocessing: {exc}",
-                RuntimeWarning,
-            )
+        # Preserve any existing embedding (users may want to keep the dataset's original UMAP).
+        # Treat any `X_umap*` key as an existing UMAP.
+        has_umap = any(str(k).lower().startswith("x_umap") for k in adata.obsm.keys())
+        if not has_umap:
+            try:
+                sc.tl.umap(adata, n_components=2)
+            except ModuleNotFoundError:
+                warnings.warn(
+                    "UMAP is not installed; skipping `sc.tl.umap` during preprocessing.",
+                    RuntimeWarning,
+                )
+            except Exception as exc:
+                warnings.warn(
+                    f"Failed to compute UMAP during preprocessing: {exc}",
+                    RuntimeWarning,
+                )
 
 
 @dataclass

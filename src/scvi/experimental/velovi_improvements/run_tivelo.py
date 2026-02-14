@@ -114,7 +114,39 @@ def run_tivelo_cli(
         adata = loader_fn()
         dataset_tag = dataset_name or scvelo_loader
     elif input_path is not None:
-        adata = sc.read_h5ad(input_path)
+        try:
+            adata = sc.read_h5ad(input_path)
+        except TypeError as exc:
+            # Work around mixed/partial `anndata` installs sometimes seen on clusters where
+            # `anndata.read_h5ad` passes `attrs=` but the loaded AnnData class doesn't accept it.
+            # We monkeypatch AnnData.__init__ to ignore `attrs` and retry.
+            msg = str(exc)
+            if "unexpected keyword argument 'attrs'" in msg:
+                try:
+                    import anndata as ad
+
+                    original_init = ad.AnnData.__init__
+
+                    def _patched_init(self, *args, attrs=None, **kwargs):  # noqa: ARG001
+                        return original_init(self, *args, **kwargs)
+
+                    ad.AnnData.__init__ = _patched_init  # type: ignore[assignment]
+                    print(
+                        "[TIVELO] WARNING: Detected `anndata` reader/init mismatch (`attrs` kwarg). "
+                        "Applying a local monkeypatch to ignore `attrs` and retrying read_h5ad."
+                    )
+                    adata = sc.read_h5ad(input_path)
+                except Exception as retry_exc:  # pragma: no cover
+                    raise TypeError(
+                        "Failed to read the provided .h5ad due to an `anndata` incompatibility "
+                        "in the current environment (AnnData.__init__ does not accept `attrs`).\n"
+                        "Workarounds:\n"
+                        "  1) Use a different input file (saved with an older anndata), or\n"
+                        "  2) Run this job in an env with a consistent anndata/scanpy install.\n\n"
+                        f"Original error: {exc}\nRetry error: {retry_exc}"
+                    ) from retry_exc
+            else:
+                raise
         dataset_tag = dataset_name or input_path.stem
     else:
         raise ValueError("Provide either an input .h5ad path or --scvelo-loader.")
@@ -162,6 +194,15 @@ def run_tivelo_cli(
         cluster_edges=cluster_edges,
         device=device,
     )
+
+    # Persist the updated AnnData with TIVelo outputs so downstream plotting/benchmarking
+    # can reuse it without rerunning TIVelo.
+    try:
+        out_path = output_dir / f"{data_name}_tivelo.h5ad"
+        adata.write_h5ad(out_path)
+        print(f"[TIVELO] Wrote updated AnnData to {out_path}")
+    except Exception as exc:  # pragma: no cover
+        print(f"[TIVELO] WARNING: failed to save AnnData: {exc}")
 
 
 def build_argparser() -> argparse.ArgumentParser:

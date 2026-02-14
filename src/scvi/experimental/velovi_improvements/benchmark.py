@@ -9,6 +9,8 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 
+import scanpy as sc
+
 try:  # pragma: no cover - optional dependency guard
     import scvelo as scv
 except ModuleNotFoundError as exc:  # pragma: no cover
@@ -17,6 +19,64 @@ except ModuleNotFoundError as exc:  # pragma: no cover
     ) from exc
 
 from scvi.experimental.tivelo.utils import metrics as tivelo_metrics
+
+
+def _coerce_neighbor_indices(
+    neighbor_indices: np.ndarray,
+    n_obs: int,
+    *,
+    expression: Optional[np.ndarray] = None,
+    n_neighbors_fallback: int = 30,
+) -> np.ndarray:
+    """Ensure neighbor indices are shaped (n_obs, k).
+
+    The runner is expected to pass a 2D integer array, but we occasionally see
+    1D arrays due to accidental variable shadowing or flattened storage.
+    This helper makes benchmarking robust by coercing/repairing the input.
+    """
+    import warnings
+
+    arr = np.asarray(neighbor_indices)
+
+    if arr.ndim == 2 and arr.shape[0] == n_obs:
+        return arr.astype(np.int64, copy=False)
+
+    if arr.ndim == 1:
+        if arr.shape[0] == n_obs:
+            warnings.warn(
+                "neighbor_indices provided as 1D array; coercing to (n_obs, 1). "
+                "This usually indicates a bug upstream (e.g., variable shadowing).",
+                RuntimeWarning,
+            )
+            return arr.reshape(n_obs, 1).astype(np.int64, copy=False)
+        if n_obs > 0 and arr.shape[0] % n_obs == 0:
+            k = int(arr.shape[0] // n_obs)
+            warnings.warn(
+                f"neighbor_indices provided as flattened 1D array; reshaping to (n_obs, {k}).",
+                RuntimeWarning,
+            )
+            return arr.reshape(n_obs, k).astype(np.int64, copy=False)
+
+    if expression is None:
+        raise ValueError(
+            f"Invalid neighbor_indices shape {arr.shape}; expected (n_obs, k) with n_obs={n_obs}. "
+            "Provide a valid kNN index matrix."
+        )
+
+    warnings.warn(
+        f"neighbor_indices has invalid shape {arr.shape}; rebuilding kNN graph from expression "
+        f"(k={n_neighbors_fallback}).",
+        RuntimeWarning,
+    )
+    # Last resort: rebuild a kNN graph from expression directly.
+    from sklearn.neighbors import NearestNeighbors
+
+    feats = np.asarray(expression, dtype=np.float32)
+    nn = NearestNeighbors(n_neighbors=min(n_neighbors_fallback + 1, max(2, n_obs)), metric="euclidean")
+    nn.fit(feats)
+    _, idx = nn.kneighbors(feats)
+    idx = idx[:, 1:]
+    return idx.astype(np.int64, copy=False)
 
 @dataclass
 class EdgeMetricCollection:
@@ -51,6 +111,25 @@ def _cosine(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.dot(a, b) / denom)
 
 
+def _select_embedding_basis(adata) -> str:
+    """Pick an existing embedding basis for scvelo plotting.
+
+    Prefers UMAP-like embeddings if present; otherwise falls back to PCA (computing it if needed).
+    """
+    obsm_keys = list(getattr(adata, "obsm", {}).keys())
+    if "X_umap" in adata.obsm:
+        return "umap"
+    umap_like = [k for k in obsm_keys if str(k).lower().startswith("x_umap")]
+    if umap_like:
+        key = sorted(umap_like, key=lambda x: x.lower())[0]
+        return key[2:] if key.lower().startswith("x_") else key
+    if "X_tsne" in adata.obsm:
+        return "tsne"
+    if "X_pca" not in adata.obsm:
+        sc.tl.pca(adata)
+    return "pca"
+
+
 def _collect_cluster_edges(clusters: np.ndarray, neighbor_indices: np.ndarray) -> List[Tuple[str, str]]:
     edges: set[Tuple[str, str]] = set()
     for idx, nbrs in enumerate(neighbor_indices):
@@ -79,6 +158,11 @@ def compute_edge_metrics(
     trans_cosine_count: Dict[Tuple[str, str], int] = {}
 
     cluster_labels = np.asarray(clusters)
+    neighbor_indices = _coerce_neighbor_indices(
+        neighbor_indices,
+        n_obs=int(velocities.shape[0]),
+        expression=expression,
+    )
 
     if cluster_edges is None:
         for idx in range(velocities.shape[0]):
@@ -171,6 +255,11 @@ def compute_velocoh(
     neighbor_indices: np.ndarray,
     sigma: Optional[float] = None,
 ) -> Dict[int, float]:
+    neighbor_indices = _coerce_neighbor_indices(
+        neighbor_indices,
+        n_obs=int(velocities.shape[0]),
+        expression=expression,
+    )
     if sigma is None:
         sigma = float(np.std(velocities))
         if sigma < 1e-6:
@@ -289,6 +378,11 @@ def benchmark_methods(
 ) -> Dict[str, MethodBenchmarkResult]:
     output_dir.mkdir(parents=True, exist_ok=True)
     expression = _ensure_dense(adata.layers["Ms"])
+    neighbor_indices = _coerce_neighbor_indices(
+        neighbor_indices,
+        n_obs=int(adata.n_obs),
+        expression=expression,
+    )
     results: Dict[str, MethodBenchmarkResult] = {}
     sigma = float(np.std(expression))
     fucci_clusters = adata.obs[fucci_key].astype(str).to_numpy() if fucci_key and fucci_key in adata.obs else None
@@ -424,18 +518,25 @@ def plot_stream_grid(
     output_path: Path,
 ) -> Path:
     methods = list(velocities.keys())
-    fig, axes = plt.subplots(1, len(methods), figsize=(4 * len(methods), 4), squeeze=False)
+    fig, axes = plt.subplots(1, len(methods), figsize=(6 * len(methods), 5.5), squeeze=False)
     for ax, method in zip(axes.flat, methods):
         adata_tmp = adata.copy()
         adata_tmp.layers["velocity"] = velocities[method]
         scv.tl.velocity_graph(adata_tmp, vkey="velocity", n_jobs=32, mode_neighbors="distances")
-        scv.tl.velocity_embedding(adata_tmp, basis="umap", vkey="velocity")
+        basis = _select_embedding_basis(adata_tmp)
+        scv.tl.velocity_embedding(adata_tmp, basis=basis, vkey="velocity")
         color_key = cluster_key if (cluster_key is not None and cluster_key in adata_tmp.obs) else None
         scv.pl.velocity_embedding_stream(
             adata_tmp,
-            basis="umap",
+            basis=basis,
             color=color_key,
-            colorbar=True,
+            legend_loc="right margin" if color_key else None,
+            legend_fontsize=12,
+            colorbar=False,
+            linewidth=1.8,
+            arrow_size=1.6,
+            density=1.6,
+            alpha=0.9,
             title=method,
             ax=ax,
             show=False,
@@ -453,18 +554,25 @@ def plot_comparison_panel(
     output_path: Path,
 ) -> Path:
     methods = list(pairs.keys())
-    fig, axes = plt.subplots(len(methods), 2, figsize=(8, 4 * len(methods)), squeeze=False)
+    fig, axes = plt.subplots(len(methods), 2, figsize=(14, 5.5 * len(methods)), squeeze=False)
     for row, method in enumerate(methods):
         before, after = pairs[method]
         adata_before = adata.copy()
         adata_before.layers["velocity"] = before
         scv.tl.velocity_graph(adata_before, vkey="velocity", n_jobs=32, mode_neighbors="distances")
-        scv.tl.velocity_embedding(adata_before, basis="umap", vkey="velocity")
+        basis = _select_embedding_basis(adata_before)
+        scv.tl.velocity_embedding(adata_before, basis=basis, vkey="velocity")
         scv.pl.velocity_embedding_stream(
             adata_before,
-            basis="umap",
+            basis=basis,
             color=cluster_key if (cluster_key is not None and cluster_key in adata_before.obs) else None,
-            colorbar=True,
+            legend_loc="right margin" if (cluster_key is not None and cluster_key in adata_before.obs) else None,
+            legend_fontsize=12,
+            colorbar=False,
+            linewidth=1.8,
+            arrow_size=1.6,
+            density=1.6,
+            alpha=0.9,
             title=f"{method} - Before",
             ax=axes[row, 0],
             show=False,
@@ -473,12 +581,18 @@ def plot_comparison_panel(
         adata_after = adata.copy()
         adata_after.layers["velocity"] = after
         scv.tl.velocity_graph(adata_after, vkey="velocity", n_jobs=32, mode_neighbors="distances")
-        scv.tl.velocity_embedding(adata_after, basis="umap", vkey="velocity")
+        scv.tl.velocity_embedding(adata_after, basis=basis, vkey="velocity")
         scv.pl.velocity_embedding_stream(
             adata_after,
-            basis="umap",
+            basis=basis,
             color=cluster_key if (cluster_key is not None and cluster_key in adata_after.obs) else None,
-            colorbar=True,
+            legend_loc="right margin" if (cluster_key is not None and cluster_key in adata_after.obs) else None,
+            legend_fontsize=12,
+            colorbar=False,
+            linewidth=1.8,
+            arrow_size=1.6,
+            density=1.6,
+            alpha=0.9,
             title=f"{method} - After TIVelo",
             ax=axes[row, 1],
             show=False,
@@ -576,9 +690,20 @@ def plot_gene_level_panels(
             adata_tmp = adata.copy()
             adata_tmp.layers["velocity"] = methods[method]
             scv.tl.velocity_graph(adata_tmp, vkey="velocity", n_jobs=32, mode_neighbors="distances")
+            basis = _select_embedding_basis(adata_tmp)
+            try:
+                scv.tl.velocity_embedding(adata_tmp, basis=basis, vkey="velocity")
+            except Exception:
+                # If the basis isn't available and can't be computed for some reason, fall back to PCA.
+                basis = "pca"
+                if "X_pca" not in adata_tmp.obsm:
+                    sc.tl.pca(adata_tmp)
+                scv.tl.velocity_embedding(adata_tmp, basis=basis, vkey="velocity")
+            color_key = cluster_key if (cluster_key is not None and cluster_key in adata_tmp.obs) else None
             scatter_kwargs = dict(
                 layer="Ms",
-                color=cluster_key if (cluster_key is not None and cluster_key in adata_tmp.obs) else None,
+                color=color_key,
+                legend_loc="right margin",
                 legend_fontsize=12,
                 legend_align_text=True,
                 use_raw=False,
@@ -589,8 +714,11 @@ def plot_gene_level_panels(
             scv.pl.scatter(adata_tmp, var_names=[gene], **scatter_kwargs)
             scv.pl.velocity_embedding(
                 adata_tmp,
-                basis="umap",
-                color=cluster_key,
+                basis=basis,
+                color=color_key,
+                legend_loc="right margin",
+                legend_fontsize=12,
+                legend_align_text=True,
                 ax=axes[1, col],
                 show=False,
             )

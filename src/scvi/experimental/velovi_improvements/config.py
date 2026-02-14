@@ -119,3 +119,4 @@ class TrainingConfig:
     paga_prior_threshold: float = 0.3
     paga_min_alignment: float = 0.0
     paga_projection_alpha: float = 0.0
+    wandb_log_plot_bundle: bool = True

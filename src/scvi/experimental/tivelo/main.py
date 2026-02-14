@@ -8,6 +8,7 @@ from .direction.correct import correct_path
 from .velocity.DTI import get_child_dict, get_d_nn, directed_graph
 from .velocity.model import get_velocity
 from .velocity.model_rate import get_velocity_rate
+from .utils.device import resolve_device
 from .utils.metrics import inner_cluster_coh, cross_boundary_correctness, cross_boundary_scvelo_probs,\
     cross_boundary_correctness2, inner_cluster_coh2, velo_coh
 
@@ -17,6 +18,12 @@ def tivelo(adata, group_key, emb_key, res=0.6, data_name="data", save_folder="re
            constrain=True, loss_fun="mse", only_s=True, alpha_1=1, alpha_2=0.1, batch_size=1024, n_epochs=100,
            adjust_DTI=False, show_DTI=False, velocity_key="velocity", cluster_edges=None, measure_performance=True,
            rate_mode=False, device="auto"):
+
+    resolved_device = resolve_device(device)
+    try:
+        print(f"[TIVELO] device={device!r} resolved_device={resolved_device}")
+    except Exception:
+        pass
 
     # create path
     result_path = save_folder + "/{}/".format(data_name)
